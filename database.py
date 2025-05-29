@@ -4,7 +4,7 @@ import os
 from typing import List, Tuple, Optional, Dict, Any
 from datetime import datetime
 
-# Пробуем импортировать разные драйверы
+# Импорты драйверов остаются те же...
 db_driver = None
 db_type = None
 
@@ -29,27 +29,33 @@ except ImportError:
             logger = logging.getLogger(__name__)
             logger.info("Используется SQLite драйвер")
         except ImportError:
-            raise ImportError("Не найден ни один поддерживаемый драйвер БД. Установите asyncpg, aiomysql или aiosqlite")
+            raise ImportError("Не найден ни один поддерживаемый драйвер БД")
 
 logger = logging.getLogger(__name__)
 
-class DatabaseManager:
+class SafeDatabaseManager:
     """
-    Универсальный менеджер для работы с разными типами баз данных.
-    Поддерживает PostgreSQL, MySQL/MariaDB и SQLite.
+    БЕЗОПАСНЫЙ менеджер БД для работы с существующими базами данных.
+    Использует отдельную таблицу для AI тэгов и не трогает существующие данные.
     """
     
-    def __init__(self):
-        """Инициализация менеджера БД"""
+    def __init__(self, table_name: str = "ai_photo_tags"):
+        """
+        Инициализация с ОТДЕЛЬНОЙ таблицей для AI тэгов
+        
+        Args:
+            table_name: имя таблицы для AI тэгов (НЕ ТРОГАЕТ существующие таблицы!)
+        """
         self.pool = None
-        self.connection = None  # Для SQLite
+        self.connection = None
         self.db_type = db_type
+        self.table_name = table_name  # Используем отдельную таблицу!
         
         # Параметры подключения из переменных окружения
         self.db_config = self._get_db_config()
         
+        logger.info(f"🔒 БЕЗОПАСНЫЙ режим: используется отдельная таблица '{self.table_name}'")
         logger.info(f"Тип БД: {self.db_type}")
-        logger.info(f"Подключение: {self.db_config.get('host', 'localhost')}:{self.db_config.get('port', 'N/A')}")
     
     def _get_db_config(self) -> Dict[str, Any]:
         """Получение конфигурации БД из переменных окружения"""
@@ -69,7 +75,7 @@ class DatabaseManager:
                 'port': int(os.getenv('DB_PORT', '3306')),
                 'user': os.getenv('DB_USER', 'root'),
                 'password': os.getenv('DB_PASSWORD', 'password'),
-                'db': os.getenv('DB_NAME', 'photo_archive')  # MySQL использует 'db' вместо 'database'
+                'db': os.getenv('DB_NAME', 'photo_archive')
             }
         else:  # SQLite
             return {
@@ -91,58 +97,90 @@ class DatabaseManager:
                 self.connection = await aiosqlite.connect(self.db_config['database'])
                 logger.info(f"SQLite подключение установлено: {self.db_config['database']}")
             
-            # Создаем таблицы
-            await self._create_tables()
+            # Проверяем существующие таблицы БЕЗОПАСНО
+            await self._check_existing_tables()
+            
+            # Создаем ТОЛЬКО нашу таблицу для AI тэгов
+            await self._create_ai_tags_table()
             
         except Exception as e:
             logger.error(f"Ошибка подключения к БД: {e}")
             raise
     
-    async def _create_tables(self):
-        """Создание таблиц с учетом типа БД"""
+    async def _check_existing_tables(self):
+        """БЕЗОПАСНАЯ проверка существующих таблиц (не меняет их!)"""
+        try:
+            if self.db_type == "postgresql":
+                query = """
+                SELECT table_name FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                """
+            elif self.db_type == "mysql":
+                query = """
+                SELECT table_name FROM information_schema.tables 
+                WHERE table_schema = DATABASE()
+                """
+            else:  # SQLite
+                query = """
+                SELECT name FROM sqlite_master WHERE type='table'
+                """
+            
+            existing_tables = await self._fetch_query(query)
+            table_names = [row[0] for row in existing_tables] if existing_tables else []
+            
+            logger.info(f"📋 Найдено существующих таблиц: {len(table_names)}")
+            logger.info(f"🔍 Таблицы: {', '.join(table_names[:5])}{'...' if len(table_names) > 5 else ''}")
+            
+            if self.table_name in table_names:
+                logger.info(f"✅ Таблица AI тэгов '{self.table_name}' уже существует")
+            else:
+                logger.info(f"🆕 Таблица AI тэгов '{self.table_name}' будет создана")
+                
+        except Exception as e:
+            logger.warning(f"Не удалось проверить существующие таблицы: {e}")
+    
+    async def _create_ai_tags_table(self):
+        """Создание ПРОСТОЙ таблицы для AI тэгов: только путь + тэги"""
         
         if self.db_type == "postgresql":
-            create_table_query = """
-            CREATE TABLE IF NOT EXISTS tagged_images (
+            create_table_query = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
                 id SERIAL PRIMARY KEY,
                 image_path VARCHAR(1000) NOT NULL UNIQUE,
-                tags JSONB NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ai_tags JSONB NOT NULL
             );
             
-            CREATE INDEX IF NOT EXISTS idx_image_path ON tagged_images(image_path);
-            CREATE INDEX IF NOT EXISTS idx_tags ON tagged_images USING GIN(tags);
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_path ON {self.table_name}(image_path);
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_tags ON {self.table_name} USING GIN(ai_tags);
+            
+            -- Добавляем комментарий для ясности
+            COMMENT ON TABLE {self.table_name} IS 'AI-generated Russian tags from CLIP model';
             """
             
         elif self.db_type == "mysql":
-            create_table_query = """
-            CREATE TABLE IF NOT EXISTS tagged_images (
+            create_table_query = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 image_path VARCHAR(1000) NOT NULL UNIQUE,
-                tags JSON NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ai_tags JSON NOT NULL
             );
             
-            CREATE INDEX IF NOT EXISTS idx_image_path ON tagged_images(image_path);
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_path ON {self.table_name}(image_path);
             """
             
         else:  # SQLite
-            create_table_query = """
-            CREATE TABLE IF NOT EXISTS tagged_images (
+            create_table_query = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 image_path TEXT NOT NULL UNIQUE,
-                tags TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ai_tags TEXT NOT NULL
             );
             
-            CREATE INDEX IF NOT EXISTS idx_image_path ON tagged_images(image_path);
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_path ON {self.table_name}(image_path);
             """
         
         await self._execute_query(create_table_query)
-        logger.info("Таблицы созданы/проверены")
+        logger.info(f"✅ Простая таблица AI тэгов '{self.table_name}' создана/проверена")
     
     async def _execute_query(self, query: str, *args):
         """Универсальное выполнение запросов"""
@@ -160,49 +198,161 @@ class DatabaseManager:
             await self.connection.execute(query, args)
             await self.connection.commit()
     
-    async def save_image_tags(self, image_path: str, tags: List[Tuple[str, float]]):
-        """Сохранение тэгов изображения"""
+    async def _fetch_query(self, query: str, *args):
+        """Универсальное выполнение SELECT запросов"""
+        if self.db_type == "postgresql":
+            async with self.pool.acquire() as connection:
+                return await connection.fetch(query, *args)
+                
+        elif self.db_type == "mysql":
+            async with self.pool.acquire() as connection:
+                async with connection.cursor() as cursor:
+                    await cursor.execute(query, args)
+                    return await cursor.fetchall()
+                    
+        else:  # SQLite
+            cursor = await self.connection.execute(query, args)
+            return await cursor.fetchall()
+    
+    async def save_image_tags(self, image_path: str, russian_tags: List[str]):
+        """
+        Сохранение русских AI тэгов изображения - ТОЛЬКО путь + тэги
+        
+        Args:
+            image_path: путь к изображению
+            russian_tags: список русских тэгов
+        """
         try:
-            # Преобразуем тэги в простой список строк
-            tag_names = [tag for tag, _ in tags]
-            tags_json = json.dumps(tag_names)
+            # Подготавливаем данные - только тэги
+            tags_json = json.dumps(russian_tags, ensure_ascii=False)
             
             if self.db_type == "postgresql":
-                query = """
-                INSERT INTO tagged_images (image_path, tags, updated_at)
-                VALUES ($1, $2, CURRENT_TIMESTAMP)
+                query = f"""
+                INSERT INTO {self.table_name} (image_path, ai_tags)
+                VALUES ($1, $2)
                 ON CONFLICT (image_path) 
-                DO UPDATE SET 
-                    tags = EXCLUDED.tags,
-                    updated_at = CURRENT_TIMESTAMP
+                DO UPDATE SET ai_tags = EXCLUDED.ai_tags
                 """
                 await self._execute_query(query, image_path, tags_json)
                 
             elif self.db_type == "mysql":
-                query = """
-                INSERT INTO tagged_images (image_path, tags)
+                query = f"""
+                INSERT INTO {self.table_name} (image_path, ai_tags)
                 VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE 
-                    tags = VALUES(tags),
-                    updated_at = CURRENT_TIMESTAMP
+                ON DUPLICATE KEY UPDATE ai_tags = VALUES(ai_tags)
                 """
                 await self._execute_query(query, image_path, tags_json)
                 
             else:  # SQLite
-                query = """
-                INSERT OR REPLACE INTO tagged_images (image_path, tags, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                query = f"""
+                INSERT OR REPLACE INTO {self.table_name} (image_path, ai_tags)
+                VALUES (?, ?)
                 """
                 await self._execute_query(query, image_path, tags_json)
-                await self.connection.commit()
             
-            logger.debug(f"Сохранены тэги для {image_path}: {tag_names}")
+            logger.debug(f"💾 Сохранены AI тэги для {image_path}: {russian_tags}")
             
         except Exception as e:
-            logger.error(f"Ошибка сохранения тэгов для {image_path}: {e}")
+            logger.error(f"❌ Ошибка сохранения тэгов для {image_path}: {e}")
             raise
     
-
+    async def get_image_tags(self, image_path: str) -> Optional[List[str]]:
+        """Получение AI тэгов для изображения"""
+        try:
+            query = f"""
+            SELECT ai_tags
+            FROM {self.table_name} 
+            WHERE image_path = {'$1' if self.db_type == 'postgresql' else '?' if self.db_type == 'sqlite' else '%s'}
+            """
+            
+            result = await self._fetch_query(query, image_path)
+            
+            if result:
+                return json.loads(result[0][0])
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения тэгов для {image_path}: {e}")
+            return None
+    
+    async def search_by_tag(self, russian_tag: str) -> List[Dict]:
+        """Поиск изображений по русскому тэгу"""
+        try:
+            if self.db_type == "postgresql":
+                query = f"""
+                SELECT image_path, ai_tags 
+                FROM {self.table_name} 
+                WHERE ai_tags @> $1::jsonb
+                """
+                tag_json = json.dumps([russian_tag], ensure_ascii=False)
+                
+            elif self.db_type == "mysql":
+                query = f"""
+                SELECT image_path, ai_tags 
+                FROM {self.table_name} 
+                WHERE JSON_CONTAINS(ai_tags, %s)
+                """
+                tag_json = json.dumps([russian_tag], ensure_ascii=False)
+                
+            else:  # SQLite
+                query = f"""
+                SELECT image_path, ai_tags 
+                FROM {self.table_name} 
+                WHERE ai_tags LIKE ?
+                """
+                tag_json = f'%"{russian_tag}"%'
+            
+            results = await self._fetch_query(query, tag_json)
+            
+            return [
+                {
+                    'image_path': row[0],
+                    'tags': json.loads(row[1])
+                }
+                for row in results
+            ]
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска по тэгу {russian_tag}: {e}")
+            return []
+    
+    async def get_stats(self) -> Dict:
+        """Статистика по AI тэгам"""
+        try:
+            count_query = f"SELECT COUNT(*) FROM {self.table_name}"
+            count_result = await self._fetch_query(count_query)
+            total_images = count_result[0][0] if count_result else 0
+            
+            return {
+                'total_tagged_images': total_images,
+                'table_name': self.table_name
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статистики: {e}")
+            return {'error': str(e)}
+    
+    async def check_database_health(self) -> Dict:
+        """Проверка здоровья подключения к БД"""
+        try:
+            # Простой запрос для проверки
+            test_query = f"SELECT COUNT(*) FROM {self.table_name}"
+            result = await self._fetch_query(test_query)
+            
+            return {
+                'status': 'healthy',
+                'connection_type': self.db_type,
+                'table_exists': True,
+                'total_records': result[0][0] if result else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Проблемы с БД: {e}")
+            return {
+                'status': 'unhealthy',
+                'error': str(e),
+                'connection_type': self.db_type
+            }
     
     async def close(self):
         """Закрытие подключения"""
@@ -213,6 +363,9 @@ class DatabaseManager:
             elif self.db_type == "sqlite" and self.connection:
                 await self.connection.close()
                 
-            logger.info("Подключение к БД закрыто")
+            logger.info("🔌 Подключение к БД закрыто")
         except Exception as e:
-            logger.error(f"Ошибка закрытия подключения: {e}")
+            logger.error(f"❌ Ошибка закрытия подключения: {e}")
+
+# Для обратной совместимости
+DatabaseManager = SafeDatabaseManager
