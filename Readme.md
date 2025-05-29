@@ -23,8 +23,8 @@
 ### 1. Клонирование проекта
 
 ```bash
-git clone <your-repo>
-cd simple-photo-tagger
+git clone https://github.com/rx3lixir/photo_tagger
+cd photo-tagger
 ```
 
 ### 2. Настройка docker-compose.yml
