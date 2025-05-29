@@ -3,6 +3,7 @@ import open_clip
 from PIL import Image
 from typing import List, Tuple, Any
 import logging
+import time
 
 # Настройка логгера для этого модуля
 logger = logging.getLogger(__name__)
@@ -36,20 +37,32 @@ class CLIPTagger:
         
         try:
             # Загружаем модель open_clip
+            logger.info("Начинаем загрузку CLIP модели...")
+            logger.info("Это может занять несколько минут при первом запуске...")
+            
+            start_time = time.time()
+            
             # create_model_and_transforms возвращает (model, preprocess_train, preprocess_val)
+            logger.info("Создание модели ViT-B-32...")
             model, _, preprocess = open_clip.create_model_and_transforms(
                 'ViT-B-32', 
                 pretrained='openai',
                 device=self.device
             )
             
+            logger.info("Модель создана, загружаем на устройство...")
             self.model = model
             self.preprocess = preprocess
+            
+            logger.info("Загружаем токенизатор...")
             self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
-            logger.info("Модель CLIP успешно загружена")
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"Модель CLIP успешно загружена за {elapsed_time:.2f} секунд")
             
         except Exception as e:
             logger.error(f"Ошибка загрузки модели CLIP: {e}")
+            logger.error(f"Тип ошибки: {type(e).__name__}")
             raise
 
     def tag_image(self, image: Image.Image, tags: List[str], top_k: int = 4) -> List[Tuple[str, float]]:

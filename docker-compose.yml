@@ -6,14 +6,14 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # ВАЖНО: Монтируем директорию с фотографиями
-      - /home/rx3lixir/Downloads/vd/ # :ro = read-only
+      # ВАЖНО: Монтируем директорию с фотографиями (ИСПРАВЛЕНО!)
+      - /home/rx3lixir/Downloads/vd:/app/photos:ro # :ro = read-only
       # Можно монтировать несколько директорий
       #- /another/photo/directory:/app/photos2:ro
     environment:
       - DB_TYPE=postgresql # или mysql, sqlite
       - DB_HOST=postgres # имя сервиса
-      - DB_PORT=5434
+      - DB_PORT=5432
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DB_NAME=photo_archive
@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5434:5432"
+      - "5434:5432" # Внешний порт 5434, внутренний 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -39,38 +39,5 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      # MariaDB (альтернатива - раскомментируйте если нужно)
-      # mariadb:
-      #   image: mariadb:11
-      #   container_name: photo_archive_mariadb
-      #   environment:
-      #     MYSQL_ROOT_PASSWORD: password
-      #     MYSQL_DATABASE: photo_archive
-      #     MYSQL_USER: photo_user
-      #     MYSQL_PASSWORD: photo_password
-      #   ports:
-      #     - "3306:3306"
-      #   volumes:
-      #     - mariadb_data:/var/lib/mysql
-      #   restart: unless-stopped
-      #   healthcheck:
-      #     test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      #     interval: 10s
-      #     timeout: 5s
-      #     retries: 5
 volumes:
   postgres_data:
-  # mariadb_data:  # Раскомментируйте если используете MariaDB
-
-# Пример конфигурации для разных БД:
-#
-# Для PostgreSQL (текущая конфигурация):
-# DB_TYPE=postgresql
-# DB_HOST=postgres
-# DB_PORT=5432
-#
-# Для MariaDB:
-# DB_TYPE=mysql
-# DB_HOST=mariadb  
-# DB_PORT=3306
-# DB_USER=photo_user
