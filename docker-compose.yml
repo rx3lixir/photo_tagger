@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15
+    container_name: photo_archive_db
+    environment:
+      POSTGRES_DB: photo_archive
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      # Папка для постоянного хранения данных
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d photo_archive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  postgres_data:
