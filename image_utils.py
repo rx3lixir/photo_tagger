@@ -1,21 +1,33 @@
-from PIL import Image, ExifTags
-from typing import Optional
+from PIL import Image
+import logging
 
+logger = logging.getLogger(__name__)
 
 def load_image(image_path: str) -> Image.Image:
-    return Image.open(image_path)
-
-
-def get_exif_datetime(image_path: str) -> Optional[str]:
+    """
+    Загрузка изображения с автоматическим ресайзом для экономии памяти.
+    
+    Args:
+        image_path: Путь к изображению
+        
+    Returns:
+        PIL изображение
+    """
     try:
         img = Image.open(image_path)
-        exif_data = img.getexif()
-        if exif_data:
-            for tag, value in exif_data.items():
-                decoded = ExifTags.TAGS.get(tag, tag)
-                if decoded == "DateTimeOriginal":
-                    return value
-        return None
+        
+        # Конвертируем в RGB если нужно (для PNG с прозрачностью и т.д.)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Ресайз больших изображений для экономии памяти и ускорения
+        max_size = 1024
+        if img.size[0] > max_size or img.size[1] > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            logger.debug(f"Изображение {image_path} уменьшено до {img.size}")
+        
+        return img
+        
     except Exception as e:
-        print(f"Error extracting EXIF from {image_path}: {e}")
-        return None
+        logger.error(f"Ошибка загрузки изображения {image_path}: {e}")
+        raise

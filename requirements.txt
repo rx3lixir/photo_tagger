@@ -1,12 +1,6 @@
 # Основные зависимости
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
-python-multipart==0.0.9
-
-# База данных
-asyncpg==0.30.0
-sqlalchemy==2.0.40
-alembic==1.16.1
 
 # ML и обработка изображений
 torch==2.7.0
@@ -14,11 +8,16 @@ torchvision==0.22.0
 open-clip-torch==2.32.0
 Pillow==11.2.1
 
+# База данных - выберите нужные драйверы
+asyncpg==0.30.0          # PostgreSQL
+aiomysql==0.2.0          # MySQL/MariaDB  
+aiosqlite==0.20.0        # SQLite (встроенная БД)
+
 # Утилиты
 pydantic==2.11.5
-pydantic-settings==2.9.1
 python-dotenv==1.1.0
-aiofiles==24.1.0
 
-# Логирование
-python-json-logger==3.3.0
+# Можно установить только нужный драйвер:
+# pip install asyncpg          # только PostgreSQL
+# pip install aiomysql         # только MySQL/MariaDB
+# pip install aiosqlite        # только SQLite
